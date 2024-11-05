@@ -15,26 +15,16 @@
 #include <vector>
 #include <utility>
 
-#include <axcl/native/ax_sys_api.h>
-#include <axcl/axcl.h>
-#include <axcl/rt/axcl_rt_engine.h>
+#include <axcl.h>
 
 #define AX_CMM_ALIGN_SIZE 128
 
-const char* AX_CMM_SESSION_NAME = "npu";
-
-typedef enum
-{
-    AX_ENGINE_ABST_DEFAULT = 0,
-    AX_ENGINE_ABST_CACHED = 1,
-} AX_ENGINE_ALLOC_BUFFER_STRATEGY_T;
-
-typedef std::pair<AX_ENGINE_ALLOC_BUFFER_STRATEGY_T, AX_ENGINE_ALLOC_BUFFER_STRATEGY_T> INPUT_OUTPUT_ALLOC_STRATEGY;
+inline auto AX_CMM_SESSION_NAME = "axclrt engine";
 
 typedef struct
 {
-    int nIndex;
-    int nSize;
+    uint32_t nIndex;
+    uint64_t nSize;
     void* pBuf;
 } AXCL_IO_BUF_T;
 
@@ -48,8 +38,7 @@ typedef struct
 
 namespace middleware
 {
-
-    void free_io_index(AXCL_IO_BUF_T* pBuf, size_t index)
+    inline void free_io_index(AXCL_IO_BUF_T* pBuf, size_t index)
     {
         for (size_t i = 0; i < index; ++i)
         {
@@ -57,7 +46,7 @@ namespace middleware
         }
     }
 
-    void free_io(AXCL_IO_DATA_T* io_data)
+    inline void free_io(AXCL_IO_DATA_T* io_data)
     {
         for (size_t j = 0; j < io_data->nInputSize; ++j)
         {
@@ -71,7 +60,7 @@ namespace middleware
         delete[] io_data->pOutputs;
     }
 
-    static inline int prepare_io(uint64_t handle, uint64_t context, axclrtEngineIOInfo io_info, axclrtEngineIO io, AXCL_IO_DATA_T *io_data, INPUT_OUTPUT_ALLOC_STRATEGY strategy)
+    inline int prepare_io(axclrtEngineIOInfo io_info, axclrtEngineIO io, AXCL_IO_DATA_T *io_data)
     {
         memset(io_data, 0, sizeof(AXCL_IO_DATA_T));
 
@@ -85,18 +74,9 @@ namespace middleware
         // 1. alloc inputs
         for (int32_t i = 0; i < inputNum; i++)
         {
-            auto bufSize = axclrtEngineGetInputSizeByIndex(io_info, i);
+            auto bufSize = axclrtEngineGetInputSizeByIndex(io_info, 0, i);
             void* devPtr = nullptr;
-            axclError ret = 0;
-            if (AX_ENGINE_ABST_DEFAULT == strategy.first)
-            {
-                ret = axclrtMalloc(&devPtr, bufSize, axclrtMemMallocPolicy::AXCL_MEM_MALLOC_HUGE_FIRST);
-            }
-            else
-            {
-                ret = axclrtMallocCached(&devPtr, bufSize, axclrtMemMallocPolicy::AXCL_MEM_MALLOC_HUGE_FIRST);
-            }
-
+            axclError ret = axclrtMalloc(&devPtr, bufSize, axclrtMemMallocPolicy{});
             if (ret != 0)
             {
                 free_io_index(io_data->pInputs, i);
@@ -107,7 +87,7 @@ namespace middleware
             io_data->pInputs[i].nIndex = i;
             io_data->pInputs[i].nSize = bufSize;
             io_data->pInputs[i].pBuf = devPtr;
-            ret = axclrtEngineSetInputBufferByIndex(handle, context, i,  devPtr, bufSize);
+            ret = axclrtEngineSetInputBufferByIndex(io, i,  devPtr, bufSize);
             if (ret != 0)
             {
                 free_io_index(io_data->pInputs, i);
@@ -119,17 +99,9 @@ namespace middleware
         // 2. alloc outputs
         for (int32_t i = 0; i < outputNum; i++)
         {
-            auto bufSize = axclrtEngineGetOutputSizeByIndex(io_info, i);
-            void* devPtr = NULL;
-            axclError ret = 0;
-            if (AX_ENGINE_ABST_DEFAULT == strategy.first)
-            {
-                ret = axclrtMalloc(&devPtr, bufSize, axclrtMemMallocPolicy::AXCL_MEM_MALLOC_HUGE_FIRST);
-            }
-            else
-            {
-                ret = axclrtMallocCached(&devPtr, bufSize, axclrtMemMallocPolicy::AXCL_MEM_MALLOC_HUGE_FIRST);
-            }
+            auto bufSize = axclrtEngineGetOutputSizeByIndex(io_info, 0, i);
+            void* devPtr = nullptr;
+            axclError ret = axclrtMalloc(&devPtr, bufSize, axclrtMemMallocPolicy{});
 
             if (ret != 0)
             {
@@ -141,7 +113,7 @@ namespace middleware
             io_data->pOutputs[i].nIndex = i;
             io_data->pOutputs[i].nSize = bufSize;
             io_data->pOutputs[i].pBuf = devPtr;
-            ret = axclrtEngineSetOutputBufferByIndex(handle, context, i,  devPtr, bufSize);
+            ret = axclrtEngineSetOutputBufferByIndex(io, i,  devPtr, bufSize);
             if (ret != 0)
             {
                 free_io_index(io_data->pOutputs, i);
@@ -167,7 +139,7 @@ namespace middleware
             return -1;
         }
 
-        axclrtMemcpy(io_data->pInputs[0].pBuf, data.size(), data.data(), data.size(), AXCL_MEMCPY_HOST_TO_DEVICE);
+        axclrtMemcpy(io_data->pInputs[0].pBuf, data.data(), data.size(), AXCL_MEMCPY_HOST_TO_DEVICE);
 
         return 0;
     }

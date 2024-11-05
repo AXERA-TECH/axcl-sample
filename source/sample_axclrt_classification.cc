@@ -26,9 +26,6 @@
 #include "score.hpp"
 #include "topk.hpp"
 
-#include <axcl/native/ax_sys_api.h>
-#include <axcl/axcl.h>
-#include <axcl/rt/axcl_rt_engine.h>
 
 const int DEFAULT_IMG_H = 224;
 const int DEFAULT_IMG_W = 224;
@@ -60,18 +57,13 @@ namespace ax
         return true;
     }
 
-    void post_process(AXCL_IO_DATA_T* io_data, INPUT_OUTPUT_ALLOC_STRATEGY strategy, const cv::Mat& mat, const std::vector<float>& time_costs)
+    void post_process(AXCL_IO_DATA_T* io_data, const cv::Mat& mat, const std::vector<float>& time_costs)
     {
         timer timer_postprocess;
 
         auto& output = io_data->pOutputs[0];
-        if (AX_ENGINE_ABST_CACHED == strategy.second)
-        {
-            axclrtMemFlush(output.pBuf, output.nSize);
-        }
-
         uchar *buf = new uchar[output.nSize];
-        axclrtMemcpy(buf, output.nSize, output.pBuf, output.nSize, AXCL_MEMCPY_DEVICE_TO_HOST);
+        axclrtMemcpy(buf, output.pBuf, output.nSize, AXCL_MEMCPY_DEVICE_TO_HOST);
 
         auto ptr = (float*)buf;
         auto class_num = output.nSize / sizeof(float);
@@ -86,8 +78,6 @@ namespace ax
         fprintf(stdout, "topk cost time:%.2f ms \n", timer_postprocess.cost());
         classification::print_score(result, 5);
 
-        delete[] buf;
-
         fprintf(stdout, "--------------------------------------\n");
         auto total_time = std::accumulate(time_costs.begin(), time_costs.end(), 0.f);
         auto min_max_time = std::minmax_element(time_costs.begin(), time_costs.end());
@@ -97,6 +87,8 @@ namespace ax
                 total_time / (float)time_costs.size(),
                 *min_max_time.second,
                 *min_max_time.first);
+
+        delete[] buf;
     }
 
     bool run_model(const std::string& model, const std::vector<uint8_t>& data, const int& repeat, cv::Mat& mat)
@@ -155,8 +147,7 @@ namespace ax
 
         // 6. alloc io
         AXCL_IO_DATA_T io_data;
-        auto malloc_strategy = std::make_pair(AX_ENGINE_ABST_DEFAULT, AX_ENGINE_ABST_CACHED);
-        ret = middleware::prepare_io(handle, context, io_info, io, &io_data, malloc_strategy);
+        ret = middleware::prepare_io(io_info, io, &io_data);
         if (ret != 0)
         {
             middleware::free_io(&io_data);
@@ -184,7 +175,7 @@ namespace ax
         // 8. warn up
         for (int i = 0; i < 5; ++i)
         {
-            axclrtEngineExecute(handle, context);
+            axclrtEngineExecute(handle, context, 0, io);
         }
 
         // 9. run model
@@ -192,7 +183,7 @@ namespace ax
         for (int i = 0; i < repeat; ++i)
         {
             timer tick;
-            ret = axclrtEngineExecute(handle, context);
+            ret = axclrtEngineExecute(handle, context, 0, io);
             time_costs[i] = tick.cost();
             if (ret != 0)
             {
@@ -206,7 +197,7 @@ namespace ax
         }
 
         // 10. get result
-        post_process(&io_data, malloc_strategy, mat, time_costs);
+        post_process(&io_data, mat, time_costs);
         fprintf(stdout, "--------------------------------------\n");
 
         middleware::free_io(&io_data);
@@ -291,10 +282,7 @@ int main(int argc, char* argv[])
 
         // 4.3 engine de init
         axclFinalize();
-        // AX_ENGINE_NPUReset();
     }
-    // 4. -  engine model  -
-
-//    AX_SYS_Deinit();
+    
     return 0;
 }
